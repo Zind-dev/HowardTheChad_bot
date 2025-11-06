@@ -12,7 +12,7 @@ A Telegram bot built in Go with AI capabilities for group conversations.
 
 ## Prerequisites
 
-- Go 1.16 or higher
+- Go 1.24 or higher
 - Telegram Bot Token (obtain from [@BotFather](https://t.me/botfather))
 
 ## Installation
