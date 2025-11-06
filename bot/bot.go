@@ -5,10 +5,12 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Zind-dev/HowardTheChad_bot/chats"
 	"github.com/Zind-dev/HowardTheChad_bot/config"
 	"github.com/Zind-dev/HowardTheChad_bot/settings"
+	"github.com/Zind-dev/HowardTheChad_bot/storage"
 	"github.com/Zind-dev/HowardTheChad_bot/users"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -20,16 +22,19 @@ type Bot struct {
 	userManager     *users.Manager
 	chatManager     *chats.Manager
 	settingsManager *settings.Manager
+	storage         storage.Storage
 }
 
 // New creates a new bot instance
-func New(cfg *config.Config) (*Bot, error) {
+func New(cfg *config.Config, store storage.Storage) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(cfg.TelegramToken)
 	if err != nil {
 		return nil, err
 	}
 
 	log.Printf("Authorized on account %s", api.Self.UserName)
+	log.Printf("Configured bot username: %s", cfg.BotUsername)
+	log.Printf("NOTE: These usernames must match for mentions to work!")
 
 	// Create settings manager with defaults from config
 	defaultSettings := settings.NewCustomSettings(cfg.ResponseFrequency, cfg.RespondToMentions)
@@ -41,6 +46,7 @@ func New(cfg *config.Config) (*Bot, error) {
 		userManager:     users.NewManager(),
 		chatManager:     chats.NewManager(),
 		settingsManager: settingsMgr,
+		storage:         store,
 	}, nil
 }
 
@@ -68,6 +74,48 @@ func (b *Bot) Start() error {
 
 // handleMessage processes incoming messages
 func (b *Bot) handleMessage(message *tgbotapi.Message) {
+	log.Printf("Message received - Chat: %d, User: %s, Text: %s",
+		message.Chat.ID, message.From.UserName, message.Text)
+
+	// Save user to storage
+	user := &storage.User{
+		ID:           message.From.ID,
+		UserName:     message.From.UserName,
+		FirstName:    message.From.FirstName,
+		LastName:     message.From.LastName,
+		MessageCount: 0, // Will be updated separately
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+	if err := b.storage.SaveUser(user); err != nil {
+		log.Printf("Warning: Failed to save user: %v", err)
+	}
+
+	// Save chat to storage
+	chat := &storage.Chat{
+		ID:           message.Chat.ID,
+		Title:        message.Chat.Title,
+		Type:         message.Chat.Type,
+		MessageCount: 0, // Will be updated separately
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+	if err := b.storage.SaveChat(chat); err != nil {
+		log.Printf("Warning: Failed to save chat: %v", err)
+	}
+
+	// Save message to storage for AI context
+	msg := &storage.Message{
+		ChatID:    message.Chat.ID,
+		UserID:    message.From.ID,
+		Text:      message.Text,
+		IsBot:     message.From.IsBot,
+		Timestamp: time.Now(),
+	}
+	if err := b.storage.SaveMessage(msg); err != nil {
+		log.Printf("Warning: Failed to save message: %v", err)
+	}
+
 	// Check if the message is in a group
 	if !message.Chat.IsGroup() && !message.Chat.IsSuperGroup() {
 		// Respond to private messages
@@ -113,9 +161,14 @@ func (b *Bot) handleMessage(message *tgbotapi.Message) {
 
 // isBotMentioned checks if the bot is mentioned in the message
 func (b *Bot) isBotMentioned(message *tgbotapi.Message) bool {
-	// Check for @ mentions
-	botMention := "@" + b.config.BotUsername
+	botUsername := b.config.BotUsername
+
+	log.Printf("Checking mention - Bot username: %s, Message: %s", botUsername, message.Text)
+
+	// Check for @ mentions (with or without @)
+	botMention := "@" + botUsername
 	if strings.Contains(message.Text, botMention) {
+		log.Printf("Detected mention via text: %s", botMention)
 		return true
 	}
 
@@ -123,15 +176,28 @@ func (b *Bot) isBotMentioned(message *tgbotapi.Message) bool {
 	for _, entity := range message.Entities {
 		if entity.Type == "mention" {
 			mention := message.Text[entity.Offset : entity.Offset+entity.Length]
+			log.Printf("Found mention entity: %s", mention)
 			if mention == botMention {
+				return true
+			}
+		}
+		// Also check text_mention type (when user doesn't have username)
+		if entity.Type == "text_mention" {
+			if entity.User != nil && entity.User.UserName == botUsername {
+				log.Printf("Detected text_mention for bot")
 				return true
 			}
 		}
 	}
 
 	// Check if the message is a reply to the bot
-	if message.ReplyToMessage != nil && message.ReplyToMessage.From.UserName == b.config.BotUsername {
-		return true
+	if message.ReplyToMessage != nil {
+		if message.ReplyToMessage.From != nil {
+			if message.ReplyToMessage.From.UserName == botUsername {
+				log.Printf("Detected reply to bot message")
+				return true
+			}
+		}
 	}
 
 	return false
@@ -152,6 +218,8 @@ func (b *Bot) respondToPrivateMessage(message *tgbotapi.Message) {
 
 	if _, err := b.api.Send(msg); err != nil {
 		log.Printf("Error sending message: %v", err)
+	} else {
+		b.saveResponseMessage(message.Chat.ID, response)
 	}
 }
 
@@ -167,6 +235,8 @@ func (b *Bot) respondToMention(message *tgbotapi.Message) {
 
 	if _, err := b.api.Send(msg); err != nil {
 		log.Printf("Error sending message: %v", err)
+	} else {
+		b.saveResponseMessage(message.Chat.ID, response)
 	}
 }
 
@@ -182,6 +252,8 @@ func (b *Bot) respondToRegularMessage(message *tgbotapi.Message) {
 
 	if _, err := b.api.Send(msg); err != nil {
 		log.Printf("Error sending message: %v", err)
+	} else {
+		b.saveResponseMessage(message.Chat.ID, response)
 	}
 }
 
@@ -207,6 +279,20 @@ func (b *Bot) generateResponse(message *tgbotapi.Message, userInfo *users.User) 
 	// In the future, this would be replaced with AI model
 	index := len(message.Text) % len(responses)
 	return responses[index]
+}
+
+// saveResponseMessage saves a bot response message to storage
+func (b *Bot) saveResponseMessage(chatID int64, text string) {
+	msg := &storage.Message{
+		ChatID:    chatID,
+		UserID:    b.api.Self.ID,
+		Text:      text,
+		IsBot:     true,
+		Timestamp: time.Now(),
+	}
+	if err := b.storage.SaveMessage(msg); err != nil {
+		log.Printf("Warning: Failed to save bot response: %v", err)
+	}
 }
 
 // GetUserInfo retrieves information about a user
@@ -260,14 +346,20 @@ func (b *Bot) isUserAdmin(chatID int64, userID int64) bool {
 
 // handleCommand processes bot commands
 func (b *Bot) handleCommand(message *tgbotapi.Message) {
-	// Only process commands in group chats or from admins in private
+	command := message.Command()
+	log.Printf("Received command: /%s from user %d in chat %d", command, message.From.ID, message.Chat.ID)
+
+	// Handle commands in private chats
 	if !message.Chat.IsGroup() && !message.Chat.IsSuperGroup() {
-		b.respondToPrivateMessage(message)
+		if command == "help" || command == "start" {
+			b.handleHelpCommand(message)
+		} else {
+			b.respondToPrivateMessage(message)
+		}
 		return
 	}
 
-	command := message.Command()
-
+	// Handle commands in group chats
 	switch command {
 	case "settings":
 		b.handleSettingsCommand(message)
@@ -277,12 +369,12 @@ func (b *Bot) handleCommand(message *tgbotapi.Message) {
 		b.handleToggleMentionsCommand(message)
 	case "resetsettings":
 		b.handleResetSettingsCommand(message)
-	case "help":
+	case "help", "start":
 		b.handleHelpCommand(message)
+	default:
+		log.Printf("Unknown command: /%s", command)
 	}
-}
-
-// handleSettingsCommand shows current settings for the chat
+} // handleSettingsCommand shows current settings for the chat
 func (b *Bot) handleSettingsCommand(message *tgbotapi.Message) {
 	chatSettings := b.settingsManager.GetSettings(message.Chat.ID)
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Zind-dev/HowardTheChad_bot/config"
+	"github.com/Zind-dev/HowardTheChad_bot/storage"
 	"github.com/Zind-dev/HowardTheChad_bot/users"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -15,8 +16,10 @@ func TestNew(t *testing.T) {
 		BotUsername:   "test_bot",
 	}
 
+	mockStore := storage.NewMockStorage()
+
 	// This will fail with invalid token, which is expected in test environment
-	_, err := New(cfg)
+	_, err := New(cfg, mockStore)
 	// We expect an error with invalid token
 	if err == nil {
 		t.Error("Expected error with invalid token")
@@ -38,7 +41,9 @@ func TestNew_WithRealToken(t *testing.T) {
 		BotUsername:   username,
 	}
 
-	bot, err := New(cfg)
+	mockStore := storage.NewMockStorage()
+
+	bot, err := New(cfg, mockStore)
 	if err != nil {
 		t.Fatalf("Failed to create bot with valid token: %v", err)
 	}

@@ -1,13 +1,28 @@
 # Quick Start Guide
 
-This guide will help you get your bot running with the new settings system.
+## Step 1: Register Commands with BotFather (IMPORTANT!)
 
-## Your Current Setup
+For commands like `/help` and `/settings` to work, register them with BotFather:
 
-You mentioned:
+1. Open Telegram and message `@BotFather`
+2. Send `/mybots`
+3. Select: `HowardTheChad_bot`
+4. Click `Edit Bot` → `Edit Commands`
+5. Paste this command list:
+
+```
+settings - Show current bot settings for this group
+setfrequency - Change response frequency (admin only)
+togglementions - Toggle mention responses on/off (admin only)
+resetsettings - Reset settings to defaults (admin only)
+help - Show available commands and usage
+```
+
+## Step 2: Your Current Setup
+
 - ✅ Bot is added to a group
-- ✅ You are the only member in the group
-- ✅ You want the bot to respond every 10th message and when mentioned
+- ✅ You are the only member (you're the admin)
+- ✅ Default: Respond every 10th message and when mentioned
 
 ## Running with Default Settings (Recommended)
 
